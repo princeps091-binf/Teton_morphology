@@ -2,3 +2,4 @@
 .pixi/*
 !.pixi/config.toml
 data/morphology_metadata_TETON.csv
+img/Feature_correlation_heatmap.png

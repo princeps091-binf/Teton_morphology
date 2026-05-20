@@ -24,8 +24,8 @@ morph_cor_mat = morph_data_tbl.iloc[:,5:-9].corr().to_numpy()
 # %%
 distance_matrix = np.clip(1 - np.abs(morph_cor_mat), 0, 1)
 condensed_distance = squareform(distance_matrix)
-linkage = hierarchy.ward(condensed_distance)
-cluster_ids = hierarchy.fcluster(linkage, t=2, criterion='distance')
+linkage = hierarchy.average(condensed_distance)
+cluster_ids = hierarchy.fcluster(linkage, t=0.6, criterion='distance')
 
 # Map features to their respective clusters
 feature_clusters = pd.DataFrame({
@@ -33,7 +33,7 @@ feature_clusters = pd.DataFrame({
     'cluster_id': cluster_ids
 })
 reordered_indices = hierarchy.leaves_list(linkage)
-
+max(cluster_ids)
 # Reorder the correlation matrix symmetrically
 reordered_corr = morph_cor_mat[reordered_indices, :][:, reordered_indices]
 reordered_clusters = cluster_ids[reordered_indices]
