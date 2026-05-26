@@ -14,6 +14,12 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score
 import gc
+import os
+import joblib
+import optuna.visualization.matplotlib as ovis
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+
 # %%
 
 
@@ -178,7 +184,6 @@ def objective(trial):
 # =====================================================================
 # 6. RUNNING THE SPEED-OPTIMIZED STUDY
 # =====================================================================
-import os
 os.environ["OMP_NUM_THREADS"] = "1"
 print("\n[STEP 2/3] Initializing Optuna Optimization Loop...")
 study = optuna.create_study(direction='maximize')
@@ -192,7 +197,35 @@ print(f"Winning Representative Feature Count: {study.best_trial.user_attrs['n_fe
 # %%
 
 study.trials_dataframe().to_csv('./data/distance_only_trials.txt',index=False,sep='\t')
+# Save the Optuna Study object
+# We use joblib because pickle/joblib preserves the full internal study history
+study_filename = "./data/optuna_morphology_study.pkl"
+joblib.dump(study, study_filename)
+# %%
 
+import optuna.importance as importance
+
+# Calculate the mathematical impact of each parameter
+param_importances = importance.get_param_importances(study)
+
+print("=== Relative Hyperparameter Drivers ===")
+for param, val in param_importances.items():
+    print(f"{param:<35}: {val*100:>5.1f}% impact")
+
+# %%
+import optuna.visualization.matplotlib as ovis
+ovis.plot_param_importances(study)
+plt.tight_layout()
+plt.show()
+
+# %%
+
+ovis.plot_optimization_history(study)
+plt.show()
+
+# %%
+ovis.plot_contour(study, params=["selector__", "lgb__num_leaves"])
+plt.show()
 # %%
 # =====================================================================
 # 7. PRODUCTION RE-FIT & HOLDOUT EVALUATION
@@ -270,6 +303,9 @@ final_holdout_auc = roc_auc_score(y_test, test_probabilities)
 print(classification_report(y_test_strings, test_predictions_strings))
 
 # %%
+model_filename = "./data/champion_cell_model.txt"
+champion_booster.save_model(model_filename)
+# %%
 
 cluster_ids = hierarchy.fcluster(LINKAGE_TREES[best_linkage], t=best_t, criterion='distance')
 reordered_indices = hierarchy.leaves_list(LINKAGE_TREES[best_linkage])
@@ -279,8 +315,6 @@ reordered_corr = corr_matrix[reordered_indices, :][:, reordered_indices]
 reordered_clusters = cluster_ids[reordered_indices]
 
 # %%
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
 def make_shuffled_cmap(num_categories=150, base_cmap='turbo', seed=42):
     # 1. Sample evenly spaced colors from a high-spectrum continuous map
     base = plt.get_cmap(base_cmap)
