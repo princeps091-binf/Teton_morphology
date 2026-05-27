@@ -8,13 +8,15 @@ import matplotlib.pyplot as plt
 import lightgbm as lgb
 import optuna.visualization.matplotlib as ovis
 import shap
-
+import scipy.stats as stats
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.preprocessing import LabelEncoder
 from sklearn.base import BaseEstimator, TransformerMixin
 from scipy.cluster import hierarchy
 from scipy.spatial.distance import squareform
 from matplotlib.colors import ListedColormap
+from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 # %%
 
 class PrecomputedClusterSelector(BaseEstimator, TransformerMixin):
@@ -84,7 +86,7 @@ condensed_distances = squareform(distance_matrix)
 
 # C. Generate pre-computed linkage trees (Ward & Average methods)
 print(" -> Fitting Hierarchical Cluster Trees...")
-# %%
+
 LINKAGE_TREES = {
     'ward': hierarchy.ward(condensed_distances),
     'average': hierarchy.average(condensed_distances)
@@ -125,11 +127,13 @@ ovis.plot_optimization_history(study)
 plt.show()
 
 # %%
-ovis.plot_contour(study, params=["selector__", "lgb__num_leaves"])
+ovis.plot_contour(study, params=["lgb__feature_fraction", "lgb__max_depth"])
 plt.show()
 
 # %%
 loaded_model = lgb.Booster(model_file="./data/champion_cell_model.txt")
+
+# %%
 
 # %%
 
@@ -148,27 +152,133 @@ X_raw_final = final_selector.fit_transform(X_raw)
 
 # %%
 
+test_probabilities = loaded_model.predict(
+    X_raw_final.to_numpy(), 
+    num_iteration=loaded_model.best_iteration
+)
+
+# %%
+test_predictions_binary = (test_probabilities > 0.992).astype(int)
+con_mat = confusion_matrix(y_encoded, test_predictions_binary)
+
+class_names = label_encoder.classes_
+# 4. Initialize the Matplotlib figure canvas
+fig, ax = plt.subplots(figsize=(6, 6), dpi=300)
+
+# 5. Build and format the Confusion Matrix Display object
+# We use the clean 'Blues' colormap to mirror professional screening layouts
+disp = ConfusionMatrixDisplay(
+        confusion_matrix=con_mat, 
+    display_labels=class_names
+)
+# Render the matrix onto our specified axis, removing the default scikit-learn colorbar
+disp.plot(
+    cmap=plt.cm.Blues, 
+    ax=ax, 
+    values_format='d',  # 'd' forces integers instead of scientific notation
+    colorbar=False      
+)
+
+# 6. Customize Fine Typography & Labeling Aesthetics
+ax.set_title('Confusion Matrix Readout\nIndependent Holdout Test Split', fontsize=12, fontweight='bold', pad=15)
+ax.set_xlabel('Predicted Label Designation', fontsize=11, fontweight='bold', labelpad=10)
+ax.set_ylabel('True Biological Label (Ground Truth)', fontsize=11, fontweight='bold', labelpad=10)
+
+# Clean up tick label presentation
+ax.set_xticklabels(class_names, fontsize=10)
+ax.set_yticklabels(class_names, fontsize=10, rotation=90, va="center")
+
+# 7. Save the high-resolution vector graphic to your local workspace
+#output_matrix_path = "model_performance_confusion_matrix.png"
+#plt.savefig(output_matrix_path, dpi=300, bbox_inches='tight')
+#print(f" -> Confusion Matrix saved to disk as: {output_matrix_path}")
+plt.show()
+# %%
+fpr, tpr, thresholds = roc_curve(y_encoded, test_probabilities)
+
+
+# 3. Calculate the exact area under the curve (AUC) metric for the plot legend
+roc_auc = auc(fpr, tpr)
+
+# 4. Initialize the Matplotlib figure canvas
+plt.figure(figsize=(15, 12), dpi=300)
+
+# 5. Plot the Champion Model's ROC Curve
+plt.plot(
+    fpr, 
+    tpr, 
+    color='darkorange', 
+    lw=2.5, 
+    label=f'LightGBM Model (AUC = {roc_auc:.4f})'
+)
+
+# 6. Plot the No-Skill Baseline (The diagonal random guess line)
+plt.plot(
+    [0, 1], 
+    [0, 1], 
+    color='navy', 
+    lw=1.5, 
+    linestyle='--', 
+    label='Random Classification Baseline (AUC = 0.5000)'
+)
+
+plt.xlim([-0.02, 1.02])
+plt.ylim([-0.02, 1.02])
+plt.xlabel('False Positive Rate (1 - Specificity)', fontsize=5, fontweight='bold', labelpad=5)
+plt.ylabel('True Positive Rate (Sensitivity)', fontsize=5, fontweight='bold', labelpad=5)
+plt.title('Receiver Operating Characteristic (ROC) Curve\nHoldout Test Dataset Evaluation', fontsize=8, fontweight='bold', pad=15)
+plt.grid(True, linestyle=':', alpha=0.6)
+plt.legend(loc="lower right", fontsize=6, frameon=True, shadow=False)
+
+# 8. Save the high-resolution vector graphic to your local repository
+#output_image_path = "model_performance_roc_curve.png"
+#plt.savefig(output_image_path, dpi=300, bbox_inches='tight')
+
+# 9. Display the figure on-screen
+plt.show()
+
+
+# %%
+
 explainer = shap.TreeExplainer(loaded_model)
 shap_values = explainer(X_raw_final)
 
 # %%
-sample_index = 73080
+sample_index = 308
 
 shap.plots.waterfall(shap_values[sample_index])
 
 # %%
-# 4. Generate the Force Plot
-# matplotlib=True forces it to render a static image instead of HTML
-shap.plots.force(
-    explainer.expected_value, 
-    shap_values.values[sample_index, :], 
-    X_raw_final.iloc[sample_index, :], 
-    matplotlib=True
-)
+# If shap value > 0 contributes to be in label 1
+# if shap value < 0 contributes to be in label 0
 
-plt.gcf().set_size_inches(16, 4)
+tmp_ax = pd.DataFrame({'shap':shap_values.mean(axis=1).values,'y':y_encoded,'prob':test_probabilities}).groupby('y').shap.plot.kde(legend=True)
+
 plt.show()
 
+# %%
+
+# The certainty landscape for individual cells
+tmp_ax = pd.DataFrame({'shap':shap_values.mean(axis=1).values,'y':y_encoded,'prob':test_probabilities}).assign(cert = lambda df: 2 * np.abs(0.5 - df.prob)).plot.scatter(x='shap',y='cert',logy=True,alpha=0.2)
+plt.show()
+
+# %%
+
+tmp_idx =71500
+from kneed import KneeLocator
+tmp_cell = shap_values[tmp_idx,:]
+tmp_cell_label = (2*y_encoded[tmp_idx] - 1)
+tmp_correct_direction_features = tmp_cell[(tmp_cell.values * tmp_cell_label) > 0]
+
+tmp_ax = pd.DataFrame({'shap':np.abs(tmp_correct_direction_features.values)}).assign(shap_rank = lambda df: df.shap.rank(pct=True,ascending=False)).sort_values('shap_rank').plot(x='shap_rank',y='shap')
+
+plt.show()
+
+df_fit, loc_fit, scale_fit = stats.t.fit(tmp_cell.values,floc=0)
+
+p_local = 2 * stats.t.sf(np.abs(tmp_correct_direction_features.values), df_fit, loc=0, scale=scale_fit)
+
+np.min(p_local)
 # %%
 
 cluster_ids = hierarchy.fcluster(LINKAGE_TREES[best_linkage], t=best_t, criterion='distance')

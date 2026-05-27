@@ -44,6 +44,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/joblib-1.5.3-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/keyutils-1.6.3-hb9d3cd8_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/kiwisolver-1.5.0-py314h97ea11e_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/kneed-0.8.6-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/krb5-1.22.2-ha1258a1_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/lcms2-2.19.1-h0c24ade_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.45.1-default_hbd61a6d_102.conda
@@ -638,6 +639,17 @@ packages:
   license_family: BSD
   size: 77363
   timestamp: 1773067048780
+- conda: https://conda.anaconda.org/conda-forge/noarch/kneed-0.8.6-pyhd8ed1ab_0.conda
+  sha256: 2f420a8c4b37152e5db779550f004d32e29720cb1118bf29aeaeac0afd9f2b81
+  md5: 172852fe4069b4da155e191bd1b1d7f9
+  depends:
+  - numpy >=1.14.2
+  - python >=3.10
+  - scipy >=1.0.0
+  license: MIT
+  license_family: MIT
+  size: 17017
+  timestamp: 1774086386492
 - conda: https://conda.anaconda.org/conda-forge/linux-64/krb5-1.22.2-ha1258a1_0.conda
   sha256: 3e307628ca3527448dd1cb14ad7bb9d04d1d28c7d4c5f97ba196ae984571dd25
   md5: fb53fb07ce46a575c5d004bbc96032c2
