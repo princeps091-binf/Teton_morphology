@@ -14,7 +14,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.base import BaseEstimator, TransformerMixin
 from scipy.cluster import hierarchy
 from scipy.spatial.distance import squareform
-
+from matplotlib.colors import ListedColormap
 # %%
 
 class PrecomputedClusterSelector(BaseEstimator, TransformerMixin):
@@ -104,6 +104,30 @@ print(f"Winning Parameters  : {study.best_params}")
 ovis.plot_param_importances(study)
 plt.show()
 
+import optuna.importance as importance
+
+# Calculate the mathematical impact of each parameter
+param_importances = importance.get_param_importances(study)
+
+print("=== Relative Hyperparameter Drivers ===")
+for param, val in param_importances.items():
+    print(f"{param:<35}: {val*100:>5.1f}% impact")
+
+# %%
+import optuna.visualization.matplotlib as ovis
+ovis.plot_param_importances(study)
+plt.tight_layout()
+plt.show()
+
+# %%
+
+ovis.plot_optimization_history(study)
+plt.show()
+
+# %%
+ovis.plot_contour(study, params=["selector__", "lgb__num_leaves"])
+plt.show()
+
 # %%
 loaded_model = lgb.Booster(model_file="./data/champion_cell_model.txt")
 
@@ -122,16 +146,16 @@ final_selector = PrecomputedClusterSelector(
 # 2. Transform BOTH datasets using the winning architecture
 X_raw_final = final_selector.fit_transform(X_raw)
 
-
-
 # %%
-
 
 explainer = shap.TreeExplainer(loaded_model)
 shap_values = explainer(X_raw_final)
 
 # %%
 sample_index = 73080
+
+shap.plots.waterfall(shap_values[sample_index])
+
 # %%
 # 4. Generate the Force Plot
 # matplotlib=True forces it to render a static image instead of HTML
@@ -146,4 +170,48 @@ plt.gcf().set_size_inches(16, 4)
 plt.show()
 
 # %%
-shap.plots.waterfall(shap_values[sample_index])
+
+cluster_ids = hierarchy.fcluster(LINKAGE_TREES[best_linkage], t=best_t, criterion='distance')
+reordered_indices = hierarchy.leaves_list(LINKAGE_TREES[best_linkage])
+max(cluster_ids)
+# Reorder the correlation matrix symmetrically
+reordered_corr = corr_matrix[reordered_indices, :][:, reordered_indices]
+reordered_clusters = cluster_ids[reordered_indices]
+
+# %%
+def make_shuffled_cmap(num_categories=150, base_cmap='turbo', seed=42):
+    # 1. Sample evenly spaced colors from a high-spectrum continuous map
+    base = plt.get_cmap(base_cmap)
+    color_list = base(np.linspace(0, 1, num_categories))
+    # 2. Shuffle the colors to maximize contrast between adjacent numbers
+    rng = np.random.default_rng(seed)
+    rng.shuffle(color_list)
+    # 3. Return as a discrete ListedColormap
+    return ListedColormap(color_list)
+
+# %%
+# Generate a 120-category custom colormap
+my_huge_cmap = make_shuffled_cmap(num_categories=max(cluster_ids +1 ))
+
+# %%
+fig, (ax_cluster, ax_heatmap) = plt.subplots(
+    1, 2, 
+    figsize=(9, 7), 
+    sharey=True, 
+    gridspec_kw={'width_ratios': [0.04, 1], 'wspace': 0.02},
+    layout='tight'
+)
+cluster_vector = reordered_clusters.reshape(-1, 1)
+# 'tab10' or 'Set3' discrete colormaps work best for clean category separation
+ax_cluster.imshow(cluster_vector, cmap=my_huge_cmap, aspect='auto')
+ax_cluster.set_xticks([])
+ax_cluster.set_ylabel("Features")
+ax_cluster.spines[:].set_visible(False)
+# matshow/imshow are incredibly fast even for thousands of elements
+cax = ax_heatmap.imshow(reordered_corr, cmap='coolwarm', vmin=-1, vmax=1, aspect='equal')
+# HIDE LABELS: Pass an empty list to the tick label setters
+ax_heatmap.set_xticklabels([])  # Removes column labels
+ax_heatmap.set_yticklabels([])  # Removes row labels (optional)
+# Add a colorbar matching the scale exactly
+fig.colorbar(cax, ax=ax_heatmap, orientation='vertical', shrink=0.8)
+plt.show()
