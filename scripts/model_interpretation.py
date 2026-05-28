@@ -17,6 +17,9 @@ from scipy.spatial.distance import squareform
 from matplotlib.colors import ListedColormap
 from sklearn.metrics import roc_curve, auc
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from multiprocessing import Pool
+from multiprocessing.shared_memory import SharedMemory
+from pathos.pools import ProcessPool
 # %%
 
 class PrecomputedClusterSelector(BaseEstimator, TransformerMixin):
@@ -229,14 +232,8 @@ plt.ylabel('True Positive Rate (Sensitivity)', fontsize=5, fontweight='bold', la
 plt.title('Receiver Operating Characteristic (ROC) Curve\nHoldout Test Dataset Evaluation', fontsize=8, fontweight='bold', pad=15)
 plt.grid(True, linestyle=':', alpha=0.6)
 plt.legend(loc="lower right", fontsize=6, frameon=True, shadow=False)
-
-# 8. Save the high-resolution vector graphic to your local repository
-#output_image_path = "model_performance_roc_curve.png"
-#plt.savefig(output_image_path, dpi=300, bbox_inches='tight')
-
 # 9. Display the figure on-screen
 plt.show()
-
 
 # %%
 
@@ -244,7 +241,7 @@ explainer = shap.TreeExplainer(loaded_model)
 shap_values = explainer(X_raw_final)
 
 # %%
-sample_index = 308
+sample_index = 70100
 
 shap.plots.waterfall(shap_values[sample_index])
 
@@ -259,28 +256,94 @@ plt.show()
 # %%
 
 # The certainty landscape for individual cells
-tmp_ax = pd.DataFrame({'shap':shap_values.mean(axis=1).values,'y':y_encoded,'prob':test_probabilities}).assign(cert = lambda df: 2 * np.abs(0.5 - df.prob)).plot.scatter(x='shap',y='cert',logy=True,alpha=0.2)
+tmp_ax = pd.DataFrame({'shap':shap_values.mean(axis=1).values,'y':y_encoded,'prob':test_probabilities}).assign(cert = lambda df: 2 * np.abs(0.5 - df.prob),label = y_raw).assign(col = lambda df: np.where(df.label.eq('Ctrl'),'steelblue','crimson')).sort_values('cert').query('label != "Ctrl"').plot.scatter(x='shap',y='cert',c='col',logy=True,alpha=0.1)
 plt.show()
 
 # %%
 
-tmp_idx =71500
-from kneed import KneeLocator
-tmp_cell = shap_values[tmp_idx,:]
-tmp_cell_label = (2*y_encoded[tmp_idx] - 1)
-tmp_correct_direction_features = tmp_cell[(tmp_cell.values * tmp_cell_label) > 0]
+from kneed import KneeLocator, find_shape
 
-tmp_ax = pd.DataFrame({'shap':np.abs(tmp_correct_direction_features.values)}).assign(shap_rank = lambda df: df.shap.rank(pct=True,ascending=False)).sort_values('shap_rank').plot(x='shap_rank',y='shap')
-
-plt.show()
-
-df_fit, loc_fit, scale_fit = stats.t.fit(tmp_cell.values,floc=0)
-
-p_local = 2 * stats.t.sf(np.abs(tmp_correct_direction_features.values), df_fit, loc=0, scale=scale_fit)
-
-np.min(p_local)
 # %%
+GLOBAL_SHAP_MATRIX = shap_values.values
+GLOBAL_FEATURE_NAMES = list(shap_values.feature_names)
 
+# Lock down the parent view as read-only for strict Linux Copy-on-Write safety
+GLOBAL_SHAP_MATRIX.flags.writeable = False
+# =====================================================================
+# 1. DEFINE THE FORK-SAFE WORKER
+# =====================================================================
+def process_local_cell_worker(tmp_idx,y_encoded_val,y_raw_val):
+    """
+    Worker function for Linux (fork). It reads directly from the 
+    GLOBAL_SHAP_MATRIX variable without copying any data.
+    """
+    # -----------------------------------------------------------------
+    # TRUE ZERO-COPY: Accessing the global variable directly from parent RAM
+    # -----------------------------------------------------------------
+    tmp_cell_values = GLOBAL_SHAP_MATRIX[tmp_idx, :]
+    # Fit the local zero-centered t-distribution to adapt to certainty stretching
+    df_fit, loc_fit, scale_fit = stats.t.fit(tmp_cell_values, floc=0)
+    # Determine directional alignment with the predicted label
+    tmp_cell_label = (2 * y_encoded_val - 1)
+    aligned_mask = (tmp_cell_values * tmp_cell_label) > 0
+    if not np.any(aligned_mask) or len(tmp_cell_values) < 3:
+        return None
+    # Isolate congruent features
+    correct_values = tmp_cell_values[aligned_mask]
+    correct_names = [GLOBAL_FEATURE_NAMES[i] for i, flag in enumerate(aligned_mask) if flag]
+    # Compute local two-tailed tail probabilities using THIS cell's unique scale
+    p_local = 2 * stats.t.sf(np.abs(correct_values), df_fit, loc=0, scale=scale_fit)
+    # Build tracking frame
+    tmp_cell_tbl = pd.DataFrame({
+        'shap': np.abs(correct_values),
+        'feature_name': correct_names,
+        'pvalue': p_local
+    })
+    # Calculate percentage-based rank
+    tmp_cell_tbl['shap_rank'] = tmp_cell_tbl['shap'].rank(pct=True, ascending=False)
+    tmp_cell_tbl = tmp_cell_tbl.sort_values('shap_rank')
+    x_data = tmp_cell_tbl['shap_rank'].to_numpy()
+    y_data = tmp_cell_tbl['shap'].to_numpy()
+    try:
+        direction, curve = find_shape(x_data, y_data)
+        kneedle = KneeLocator(x=x_data, y=y_data, curve=curve, direction=direction, S=1.0)
+        if kneedle.knee is not None:
+            cutoff = kneedle.knee
+            tmp_cell_top_feature_tbl = tmp_cell_tbl.query('shap_rank < @cutoff').copy()
+            # Label with metadata
+            tmp_cell_top_feature_tbl['cell_idx'] = tmp_idx
+            tmp_cell_top_feature_tbl['label'] = y_raw_val
+            return tmp_cell_top_feature_tbl
+    except Exception:
+        pass
+    return None
+# %%
+n_cells = GLOBAL_SHAP_MATRIX.shape[0]
+
+# Prepare individual argument vectors for pathos (it handles multi-argument maps beautifully)
+indices = list(range(n_cells))
+encoded_labels = list(y_encoded)
+raw_labels = list(y_raw)
+
+print(f"Spawning Pathos ProcessPool on Linux...")
+# Pathos handles pool creation and context allocation automatically
+# Map the inputs across your workers
+with ProcessPool as pool:
+    results = pool.map(process_local_cell_worker, indices, encoded_labels, raw_labels)
+
+print("Compiling final population ledger...")
+shap_res_df = pd.concat([df for df in results if df is not None])
+
+# %%
+shap_res_df.merge(pd.DataFrame({'cell_idx':list(range(test_probabilities.shape[0])),'proba':test_probabilities})).query('proba < 0.9').feature_name.value_counts()
+
+# %%
+tmp_feature_name = ['Texture_InverseDifferenceMoment_Cell-Membrane.CP01_3_00_256']
+tmp_feature_tbl = X_raw_final.loc[:,tmp_feature_name].assign(label = y_raw)
+tmp_feature_tbl.columns= ['tmp_feature','label']
+tmp_feature_tbl.groupby('label').tmp_feature.plot.kde(legend=True)
+plt.show()
+# %%
 cluster_ids = hierarchy.fcluster(LINKAGE_TREES[best_linkage], t=best_t, criterion='distance')
 reordered_indices = hierarchy.leaves_list(LINKAGE_TREES[best_linkage])
 max(cluster_ids)
