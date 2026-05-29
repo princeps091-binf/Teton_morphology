@@ -3,3 +3,8 @@
 !.pixi/config.toml
 data/morphology_metadata_TETON.csv
 img/Feature_correlation_heatmap.png
+img/Actin_CP01_density.png
+img/Area_density.png
+img/Intensity_MeanIntensityEdge_Cell_Membrane_CP01_density.png
+img/Intensity_MinIntensityEdge_Endoplasmic_Reticulum_CP02_density.png
+img/Texture_InverseDifferenceMoment_Cell_Membrane.CP01_3_00_256_density.png

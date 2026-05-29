@@ -152,7 +152,7 @@ final_selector = PrecomputedClusterSelector(
 
 # 2. Transform BOTH datasets using the winning architecture
 X_raw_final = final_selector.fit_transform(X_raw)
-
+X_raw_resistant = final_selector.fit_transform(data_tbl.query('treatment == "R1280"').loc[:,columns_select])
 # %%
 
 test_probabilities = loaded_model.predict(
@@ -160,6 +160,18 @@ test_probabilities = loaded_model.predict(
     num_iteration=loaded_model.best_iteration
 )
 
+# %%
+
+resistant_probabilities = loaded_model.predict(
+    X_raw_resistant.to_numpy(), 
+    num_iteration=loaded_model.best_iteration
+)
+
+resistant_predictions_binary = (resistant_probabilities > 0.992).astype(int)
+# %%
+
+tmp_ax = pd.concat([pd.DataFrame({'proba':resistant_probabilities}).assign(label='R1280'),pd.DataFrame({'proba':test_probabilities,'label' : y_raw})]).query('label == "Ctrl"').groupby('label').proba.plot.kde(legend=True)
+plt.show()
 # %%
 test_predictions_binary = (test_probabilities > 0.992).astype(int)
 con_mat = confusion_matrix(y_encoded, test_predictions_binary)
@@ -335,14 +347,21 @@ print("Compiling final population ledger...")
 shap_res_df = pd.concat([df for df in results if df is not None])
 
 # %%
-shap_res_df.merge(pd.DataFrame({'cell_idx':list(range(test_probabilities.shape[0])),'proba':test_probabilities})).query('proba < 0.9').feature_name.value_counts()
+shap_res_df.merge(pd.DataFrame({'cell_idx':list(range(test_probabilities.shape[0])),'proba':test_probabilities})).query('proba < 0.9').query('~(label == "Ctrl")').feature_name.value_counts().head(10)
 
 # %%
-tmp_feature_name = ['Texture_InverseDifferenceMoment_Cell-Membrane.CP01_3_00_256']
-tmp_feature_tbl = X_raw_final.loc[:,tmp_feature_name].assign(label = y_raw)
-tmp_feature_tbl.columns= ['tmp_feature','label']
-tmp_feature_tbl.groupby('label').tmp_feature.plot.kde(legend=True)
+
+tmp_ax = shap_res_df.merge(pd.DataFrame({'cell_idx':list(range(test_probabilities.shape[0])),'proba':test_probabilities})).query('pvalue < 0.1').groupby(['cell_idx','label','proba']).agg(n_feature = ('feature_name','nunique')).reset_index().assign(cert_label = lambda df: pd.qcut(df.proba,np.linspace(0,1,101))).groupby('cert_label').agg(m_feature = ('n_feature','mean'),m_proba = ('proba','mean')).plot.scatter(x='m_proba',y='m_feature')
 plt.show()
+# %%
+tmp_feature_name = ['Texture_Correlation_Cell-Membrane.CP01_3_03_256']
+tmp_feature_tbl = X_raw_final.loc[:,tmp_feature_name].assign(label = y_raw)
+resistant_cell_tbl = data_tbl.query('treatment == "R1280"').loc[:,tmp_feature_name].assign(label = 'R1280')
+tmp_feature_tbl = pd.concat([tmp_feature_tbl,resistant_cell_tbl])
+tmp_feature_tbl.columns= ['tmp_feature','label']
+tmp_ax = tmp_feature_tbl.groupby('label').tmp_feature.plot.kde(legend=True,title='Cell Area Distribution')
+plt.show()
+
 # %%
 cluster_ids = hierarchy.fcluster(LINKAGE_TREES[best_linkage], t=best_t, criterion='distance')
 reordered_indices = hierarchy.leaves_list(LINKAGE_TREES[best_linkage])
